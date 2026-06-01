@@ -34,8 +34,7 @@ export function SiteHeader() {
             <div className="flex items-center gap-3">
               <span className="hidden items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium sm:flex">
                 <UserIcon className="h-3.5 w-3.5" />
-                {user.email} ·{" "}
-                <span className="font-semibold">{user.role}</span>
+                {user.name}
               </span>
               <button
                 onClick={handleLogout}

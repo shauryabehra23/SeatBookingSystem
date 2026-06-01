@@ -1,75 +1,96 @@
 "use client";
 
-import { useContext, createContext, useState, useEffect, ReactNode } from "react";
+import {
+  useContext,
+  createContext,
+  useState,
+  useEffect,
+  ReactNode,
+} from "react";
+import { User as ApiUser, AuthState } from "@/types/auth";
+import { authAPI, ApiCallError } from "@/lib/api";
+import { toast } from "sonner";
 
-export type UserRole = "citizen" | "executive" | "vip";
-
-export interface User {
-  id: string;
-  email: string;
-  role: UserRole;
-  name: string;
-}
-
-interface AuthContextType {
-  user: User | null;
-  login: (email: string, password: string) => void;
+interface AuthContextType extends AuthState {
+  login: (phone: string, password: string) => Promise<void>;
   logout: () => void;
-  isAuthenticated: boolean;
   isLoading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const STORAGE_KEY = "seatbooking_auth";
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [state, setState] = useState<AuthState>({
+    token: null,
+    user: null,
+    isAuthenticated: false,
+  });
   const [isLoading, setIsLoading] = useState(true);
 
+  // Restore auth from localStorage on mount
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("user");
+      const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         try {
-          setUser(JSON.parse(stored));
+          const parsed = JSON.parse(stored) as AuthState;
+          setState(parsed);
         } catch (e) {
-          console.error("Failed to parse user", e);
+          console.error("Failed to restore auth state:", e);
+          localStorage.removeItem(STORAGE_KEY);
         }
       }
       setIsLoading(false);
     }
   }, []);
 
-  const login = (email: string, password: string) => {
-    let role: UserRole = "citizen";
-    if (email.toLowerCase().includes("vip")) {
-      role = "vip";
-    } else if (email.toLowerCase().includes("executive")) {
-      role = "executive";
+  // Persist to localStorage whenever state changes
+  useEffect(() => {
+    if (!isLoading && typeof window !== "undefined") {
+      if (state.isAuthenticated && state.token) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+      }
     }
+  }, [state, isLoading]);
 
-    const newUser: User = {
-      id: Math.random().toString(),
-      email,
-      role,
-      name: email.split("@")[0],
-    };
-
-    setUser(newUser);
-    localStorage.setItem("user", JSON.stringify(newUser));
+  const login = async (phone: string, password: string) => {
+    try {
+      const response = await authAPI.login({ phone, password });
+      setState({
+        token: response.token,
+        user: response.user,
+        isAuthenticated: true,
+      });
+      toast.success(`Welcome back, ${response.user.name}!`);
+    } catch (error) {
+      if (error instanceof ApiCallError) {
+        toast.error(error.apiError.message);
+      } else {
+        toast.error("Login failed. Please try again.");
+      }
+      throw error;
+    }
   };
 
   const logout = () => {
-    setUser(null);
-    localStorage.removeItem("user");
+    setState({
+      token: null,
+      user: null,
+      isAuthenticated: false,
+    });
+    toast.info("Logged out successfully");
   };
 
   return (
     <AuthContext.Provider
       value={{
-        user,
+        ...state,
         login,
         logout,
-        isAuthenticated: Boolean(user),
         isLoading,
       }}
     >
