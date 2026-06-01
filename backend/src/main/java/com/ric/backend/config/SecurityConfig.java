@@ -50,6 +50,9 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
 
                 // ── Public endpoints (no token needed) ──────────────────────
+                // Allow static resources (like ws-test.html) and WebSocket handshake
+                .requestMatchers("/*.html", "/ws-tickets/**").permitAll()
+
                 // Anyone can browse events and seats
                 .requestMatchers(HttpMethod.GET, "/api/events/**").permitAll()
 

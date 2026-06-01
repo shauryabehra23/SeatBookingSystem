@@ -1,11 +1,13 @@
 package com.ric.backend.service;
 
+import com.ric.backend.dto.SeatUpdateMessage;
 import com.ric.backend.exception.ApiException;
 import com.ric.backend.model.Seat;
 import com.ric.backend.repository.SeatRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -29,6 +31,11 @@ public class SeatService {
     // Spring gives us RedisTemplate automatically once we add the Redis dependency
     @Autowired
     private StringRedisTemplate redisTemplate;
+
+    // SimpMessagingTemplate is provided by Spring WebSocket.
+    // It lets us PUSH messages to any /topic/* channel from anywhere in our code.
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
 
     // ─── 1. FETCH ALL SEATS (with live HELD status from Redis) ───────────────
 
@@ -94,6 +101,13 @@ public class SeatService {
                     .orElseThrow(() -> new ApiException(
                             "Seat not found: " + seatId, HttpStatus.NOT_FOUND));
 
+            // VULNERABILITY FIX: Ensure the seat actually belongs to the requested event!
+            if (!seat.getEventId().equals(eventId)) {
+                throw new ApiException(
+                        "Seat " + seatId + " does not belong to Event " + eventId, 
+                        HttpStatus.BAD_REQUEST);
+            }
+
             if (!"AVAILABLE".equals(seat.getStatus())) {
                 unavailableInPostgres.add(seatId);
             }
@@ -134,6 +148,12 @@ public class SeatService {
                     "Some seats were just taken by another user: " + alreadyHeld,
                     HttpStatus.CONFLICT);
         }
+
+        // Step 4: Broadcast to ALL users viewing this event's seat map.
+        // Every browser subscribed to this topic will instantly see these seats turn HELD.
+        // Destination pattern: /topic/events/{eventId}/seats
+        String destination = String.format("/topic/events/%d/seats", eventId);
+        messagingTemplate.convertAndSend(destination, new SeatUpdateMessage(eventId, seatIds, "HELD"));
     }
 
     // ─── 3. RELEASE SEATS (Delete from Redis manually) ───────────────────────
@@ -147,6 +167,9 @@ public class SeatService {
      * This method just speeds up the process.
      */
     public void releaseSeats(Long eventId, List<Long> seatIds, Long userId) {
+        // Track which seats were actually released (those belonging to this user)
+        List<Long> releasedSeatIds = new ArrayList<>();
+
         for (Long seatId : seatIds) {
             String key = String.format(HOLD_KEY, eventId, seatId);
 
@@ -155,7 +178,15 @@ public class SeatService {
             String holdOwner = redisTemplate.opsForValue().get(key);
             if (String.valueOf(userId).equals(holdOwner)) {
                 redisTemplate.delete(key);
+                releasedSeatIds.add(seatId); // track for WebSocket broadcast
             }
+        }
+
+        // Broadcast ONLY the seats that were actually released (not skipped ones)
+        // This prevents false "AVAILABLE" signals for seats held by other users
+        if (!releasedSeatIds.isEmpty()) {
+            String destination = String.format("/topic/events/%d/seats", eventId);
+            messagingTemplate.convertAndSend(destination, new SeatUpdateMessage(eventId, releasedSeatIds, "AVAILABLE"));
         }
     }
 }
