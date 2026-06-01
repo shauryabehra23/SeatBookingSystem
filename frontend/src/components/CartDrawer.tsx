@@ -1,6 +1,9 @@
-import { X, Loader2 } from "lucide-react";
+import { X, Loader2, Clock } from "lucide-react";
 import { Seat } from "@/types/seat";
 import { formatPrice } from "@/lib/utils";
+import { useEffect, useState, useRef } from "react";
+
+const HOLD_DURATION_SECONDS = 5 * 60; // 5 minutes to match backend Redis TTL
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -21,7 +24,47 @@ export function CartDrawer({
   onCheckout,
   isLoading = false,
 }: CartDrawerProps) {
+  const [secondsLeft, setSecondsLeft] = useState(HOLD_DURATION_SECONDS);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Bug 4 fix: Start countdown when drawer opens, clear when it closes
+  useEffect(() => {
+    if (isOpen) {
+      setSecondsLeft(HOLD_DURATION_SECONDS);
+
+      timerRef.current = setInterval(() => {
+        setSecondsLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(timerRef.current!);
+            timerRef.current = null;
+            // Auto-close when hold expires — parent will call release
+            onClose();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const minutes = Math.floor(secondsLeft / 60);
+  const seconds = secondsLeft % 60;
+  const isExpiringSoon = secondsLeft <= 60; // Last 60 seconds
 
   const handleCheckout = async () => {
     await onCheckout();
@@ -42,6 +85,22 @@ export function CartDrawer({
           >
             <X size={24} className="text-[#1E293B]" />
           </button>
+        </div>
+
+        {/* Hold Timer Banner */}
+        <div
+          className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors ${
+            isExpiringSoon
+              ? "bg-red-50 text-red-700 border-b border-red-200"
+              : "bg-amber-50 text-amber-700 border-b border-amber-200"
+          }`}
+        >
+          <Clock size={16} className={isExpiringSoon ? "animate-pulse" : ""} />
+          <span>
+            {isExpiringSoon
+              ? `⚠️ Hold expiring in ${minutes}:${seconds.toString().padStart(2, "0")} — complete your booking now!`
+              : `Seats held for ${minutes}:${seconds.toString().padStart(2, "0")} — complete your booking before time runs out.`}
+          </span>
         </div>
 
         {/* Content */}
@@ -97,7 +156,7 @@ export function CartDrawer({
             disabled={isLoading}
             className="w-full px-4 py-3 rounded-lg border border-slate-200 text-[#1E293B] hover:bg-slate-50 transition font-semibold disabled:opacity-50"
           >
-            Cancel
+            Cancel &amp; Release Seats
           </button>
         </div>
       </div>
