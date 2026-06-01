@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { eventAPI, seatAPI, bookingAPI, ApiCallError } from "@/lib/api";
-import { Event } from "@/types/event";
+import { seatAPI, bookingAPI, ApiCallError } from "@/lib/api";
+
 import { Seat } from "@/types/seat";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,7 +20,8 @@ export default function BookEventPage() {
   const eventId = parseInt(params.id as string);
   const { user, token, isLoading: authLoading } = useAuth();
 
-  const [event, setEvent] = useState<Event | null>(null);
+  const event = null as unknown as Event;
+
   const [seats, setSeats] = useState<Seat[]>([]);
   const [loading, setLoading] = useState(true);
   const [isHolding, setIsHolding] = useState(false);
@@ -35,11 +36,7 @@ export default function BookEventPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [eventData, seatsData] = await Promise.all([
-          eventAPI.getById(eventId),
-          seatAPI.getByEventId(eventId),
-        ]);
-        setEvent(eventData);
+        const seatsData = await seatAPI.getByEventId(eventId);
         setSeats(seatsData);
       } catch (error) {
         if (error instanceof ApiCallError) {
@@ -222,25 +219,6 @@ export default function BookEventPage() {
     );
   }
 
-  if (!event) {
-    return (
-      <div className="min-h-screen bg-[#F8FAFC]">
-        <SiteHeader />
-        <div className="flex items-center justify-center py-16">
-          <div className="text-center">
-            <p className="text-xl text-slate-600 mb-4">Event not found</p>
-            <Link
-              href="/events"
-              className="inline-flex items-center gap-2 text-[#B86B6B] font-semibold hover:underline"
-            >
-              <ArrowLeft className="h-4 w-4" /> Back to Events
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-[#F8FAFC] pb-32">
       <SiteHeader />
@@ -253,9 +231,8 @@ export default function BookEventPage() {
         >
           <ArrowLeft className="h-3.5 w-3.5" /> Back to events
         </Link>
-        <h1 className="text-4xl font-bold text-[#1E293B] mb-2">
-          {event.title}
-        </h1>
+        <h1 className="text-4xl font-bold text-[#1E293B] mb-2">Book Seats</h1>
+
         <p className="text-slate-600 mb-8">Select your seats below</p>
 
         {/* Seat Map */}
@@ -346,7 +323,7 @@ export default function BookEventPage() {
           selectedSeats={selectedArray.map(
             (s) => `${s.rowLabel}${s.seatNumber}`,
           )}
-          basePrice={event.ticketPrice}
+          basePrice={selectedArray.length ? selectedArray[0].price : 0}
           totalAmount={total}
           onCartOpen={handleCartOpen}
           isLoading={isHolding}
@@ -357,7 +334,7 @@ export default function BookEventPage() {
       <CartDrawer
         isOpen={drawerOpen}
         selectedSeats={selectedArray}
-        eventTitle={event.title}
+        eventTitle={"Event"}
         totalAmount={total}
         onClose={handleCartClose}
         onCheckout={handleCheckout}

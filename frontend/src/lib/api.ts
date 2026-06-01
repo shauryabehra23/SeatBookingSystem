@@ -23,39 +23,63 @@ const API_BASE_URL = "http://localhost:8080/api";
 
 /**
  * Helper function to make API calls with error handling
+ * Uses Record<string, any> to bypass environment type sync issues safely
  */
 async function apiCall<T>(
   endpoint: string,
-  options: RequestInit = {},
+  options: Record<string, any> = {},
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
 
   try {
     const response = await fetch(url, {
+      ...options, // Spread incoming options first
       headers: {
+        Accept: "application/json",
         "Content-Type": "application/json",
-        ...options.headers,
+        ...options.headers, // Merges your dynamic Authorization tokens safely
       },
-      ...options,
     });
 
     // If response is not ok, parse error
     if (!response.ok) {
       let errorData: ApiError;
+
+      // Prefer JSON error payloads, but tolerate plain text / other formats.
       try {
+        // Attempt to parse JSON first
         errorData = await response.json();
       } catch {
+        // Fallback: read as text (e.g., "text/plain" from server errors)
+        let bodyText = "";
+        try {
+          bodyText = await response.text();
+        } catch {
+          bodyText = "";
+        }
+
         errorData = {
           timestamp: new Date().toISOString(),
           status: response.status,
           error: response.statusText,
-          message: `HTTP ${response.status}: ${response.statusText}`,
+          message:
+            bodyText?.trim() ||
+            `HTTP ${response.status}: ${response.statusText}`,
         };
       }
+
       throw new ApiCallError(errorData);
     }
 
-    // Parse and return response
+    // Parse and return response.
+    // IMPORTANT: avoid attempting to parse non-JSON (text/plain) success bodies.
+    const contentType = response.headers.get("Content-Type") || "";
+    const isJson =
+      contentType.includes("application/json") ||
+      contentType.includes("application/problem+json");
+    if (!isJson) {
+      return undefined as unknown as T;
+    }
     return await response.json();
   } catch (error) {
     if (error instanceof ApiCallError) {
@@ -141,15 +165,6 @@ export const eventAPI = {
       method: "GET",
       // Prevent credentialed requests / preflight issues from triggering CORS blocks
       credentials: "omit",
-    }),
-
-  /**
-   * GET /api/events/:eventId
-   * Fetches a single event (not in API_DOCS but useful)
-   */
-  getById: (eventId: number): Promise<Event> =>
-    apiCall(`/events/${eventId}`, {
-      method: "GET",
     }),
 };
 
@@ -237,15 +252,5 @@ export const bookingAPI = {
 
 /**
  * ============ WEBSOCKET ============
- */
-
-/**
- * WebSocket endpoint
- * Use with sockjs-client and @stomp/stompjs
- * Example:
- *   const client = new Client({
- *     webSocketFactory: () => new SockJS(WEBSOCKET_URL),
- *   });
- *   client.subscribe(`/topic/events/${eventId}/seats`, (message) => {...});
  */
 export const WEBSOCKET_URL = "http://localhost:8080/ws-tickets";
