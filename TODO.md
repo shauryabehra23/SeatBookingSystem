@@ -1,0 +1,3 @@
+- [x] Update hero page (frontend/src/app/page.tsx) to show “Sign in” CTA only when user is not authenticated.
+- [ ] Verify in browser: when logged in, hero CTA is hidden; when logged out, CTA appears.
+- [x] Replace stage icon with gray/white “STAGE” label on booking seat map (frontend/src/app/events/[id]/book/page.tsx).

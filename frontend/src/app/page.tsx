@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { ArrowRight, Crown, ShieldCheck, Ticket } from "lucide-react";
 import { SiteHeader } from "@/components/SiteHeader";
+import { useAuth } from "@/lib/auth";
 
 export default function Home() {
+  const { user } = useAuth();
+
   return (
     <div className="min-h-screen bg-[#F8FAFC]">
       <SiteHeader />
@@ -32,12 +35,14 @@ export default function Home() {
                 <Ticket className="h-4 w-4" /> Browse events{" "}
                 <ArrowRight className="h-4 w-4" />
               </Link>
-              <Link
-                href="/login"
-                className="inline-flex items-center gap-2 rounded-md bg-[#4A6B7B] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#3a5666]"
-              >
-                Sign in
-              </Link>
+              {!user && (
+                <Link
+                  href="/login"
+                  className="inline-flex items-center gap-2 rounded-md bg-[#4A6B7B] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#3a5666]"
+                >
+                  Sign in
+                </Link>
+              )}
             </div>
           </div>
           <div className="hidden lg:block">

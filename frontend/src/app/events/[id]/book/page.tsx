@@ -240,7 +240,7 @@ export default function BookEventPage() {
           {/* Stage */}
           <div className="text-center mb-12">
             <div className="inline-block px-12 py-3 rounded-full bg-[#B86B6B] text-white font-bold">
-              🎤 STAGE
+              <div className="text-sm font-bold tracking-wide">STAGE</div>
             </div>
           </div>
 
