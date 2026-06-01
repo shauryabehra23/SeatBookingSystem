@@ -30,8 +30,16 @@ export function SiteHeader() {
           <Link href="/events" className="hover:underline underline-offset-4">
             Events
           </Link>
+
           {user ? (
             <div className="flex items-center gap-3">
+              <Link
+                href="/bookings"
+                className="hover:underline underline-offset-4 text-xs"
+              >
+                My bookings
+              </Link>
+
               <span className="hidden items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium sm:flex">
                 <UserIcon className="h-3.5 w-3.5" />
                 {user.name}

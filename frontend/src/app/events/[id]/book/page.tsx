@@ -337,7 +337,10 @@ export default function BookEventPage() {
         eventTitle={"Event"}
         totalAmount={total}
         onClose={handleCartClose}
-        onCheckout={handleCheckout}
+        onCheckout={async () => {
+          // CartDrawer expects a Promise<void>
+          await handleCheckout();
+        }}
         isLoading={isCheckingOut}
       />
     </div>
