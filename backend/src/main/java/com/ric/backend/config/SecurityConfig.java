@@ -41,6 +41,11 @@ public class SecurityConfig {
             // Disable CSRF: we use stateless JWT, not browser sessions/cookies
             .csrf(AbstractHttpConfigurer::disable)
 
+            // Enable Spring Security's built-in CORS support.
+            // This tells Security to delegate CORS decisions to our CorsConfig bean
+            // instead of blocking cross-origin requests itself.
+            .cors(cors -> cors.configure(http))
+
             // Stateless: Spring should NOT create or use HTTP sessions.
             // Every request must carry its own JWT.
             .sessionManagement(session ->
@@ -50,6 +55,11 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
 
                 // ── Public endpoints (no token needed) ──────────────────────
+                // CORS Preflight: browsers send OPTIONS before every cross-origin request.
+                // Spring Security must let ALL OPTIONS requests through unconditionally,
+                // otherwise the browser blocks the actual GET/POST that follows.
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
                 // Allow static resources (like ws-test.html) and WebSocket handshake
                 .requestMatchers("/*.html", "/ws-tickets/**").permitAll()
 
