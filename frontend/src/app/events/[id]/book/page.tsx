@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { seatAPI, bookingAPI, ApiCallError } from "@/lib/api";
+import SockJS from "sockjs-client";
+import { Client } from "@stomp/stompjs";
 
 import { Seat } from "@/types/seat";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { SiteHeader } from "@/components/SiteHeader";
-import { SeatRow } from "@/components/SeatRow";
 import { CartBar } from "@/components/CartBar";
 import { CartDrawer } from "@/components/CartDrawer";
 
@@ -20,14 +21,19 @@ export default function BookEventPage() {
   const eventId = parseInt(params.id as string);
   const { user, token, isLoading: authLoading } = useAuth();
 
-  const event = null as unknown as Event;
-
   const [seats, setSeats] = useState<Seat[]>([]);
   const [loading, setLoading] = useState(true);
   const [isHolding, setIsHolding] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Bug 6 fix: Update refs directly, not via useEffect, to avoid one-render-behind race
+  const drawerOpenRef = useRef(false);
+  // Bug 1 fix: Track which seat IDs were held by the current user to skip own WS events
+  const heldByMeRef = useRef<Set<number>>(new Set());
+  // Bug 3 fix: Track whether a real hold was placed (so we know if release is needed)
+  const holdPlacedRef = useRef(false);
 
   // Fetch event and seats
   useEffect(() => {
@@ -42,7 +48,7 @@ export default function BookEventPage() {
         if (error instanceof ApiCallError) {
           toast.error(error.apiError.message);
         } else {
-          toast.error("Failed to load event or seats");
+          toast.error("Failed to load seats");
         }
         console.error("Failed to fetch data:", error);
       } finally {
@@ -60,31 +66,94 @@ export default function BookEventPage() {
     }
   }, [user, authLoading, router]);
 
-  // Handle seat selection
-  const onSeatToggle = useCallback(async (seatId: number, status: string) => {
-    if (status === "BOOKED") {
-      toast.error("This seat is already booked");
-      return;
-    }
+  // WebSocket for real-time seat updates
+  useEffect(() => {
+    if (!eventId) return;
 
-    if (status === "HELD") {
-      toast.error("This seat is currently held by another user");
-      return;
-    }
-
-    // Toggle selection
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(seatId)) {
-        next.delete(seatId);
-      } else {
-        next.add(seatId);
-      }
-      return next;
+    const client = new Client({
+      webSocketFactory: () => new SockJS("http://localhost:8080/ws-tickets"),
+      reconnectDelay: 5000,
     });
-  }, []);
 
-  // Hold seats when drawer opens
+    client.onConnect = () => {
+      client.subscribe(`/topic/events/${eventId}/seats`, (message) => {
+        const update = JSON.parse(message.body);
+        // update = { eventId: number, seatIds: number[], status: "HELD" | "AVAILABLE" | "BOOKED" }
+
+        // Update the seat status in the seat map for all users
+        setSeats((prevSeats) =>
+          prevSeats.map((seat) => {
+            if (update.seatIds.includes(seat.id)) {
+              return { ...seat, status: update.status };
+            }
+            return seat;
+          }),
+        );
+
+        // Bug 1 fix: Only run conflict detection if the update is NOT for seats we just held ourselves
+        if (update.status === "HELD" || update.status === "BOOKED") {
+          const isOwnHoldEvent = update.seatIds.every((id: number) =>
+            heldByMeRef.current.has(id),
+          );
+
+          if (!isOwnHoldEvent && !drawerOpenRef.current) {
+            setSelected((prev) => {
+              const next = new Set(prev);
+              let conflict = false;
+              update.seatIds.forEach((id: number) => {
+                if (next.has(id)) {
+                  next.delete(id);
+                  conflict = true;
+                }
+              });
+              if (conflict) {
+                toast.warning(
+                  "Some of your selected seats were just taken by another user.",
+                );
+              }
+              return next;
+            });
+          }
+        }
+      });
+    };
+
+    client.activate();
+    return () => {
+      client.deactivate();
+    };
+  }, [eventId]);
+
+  // Handle seat selection (only when drawer is not open / no hold placed)
+  const onSeatToggle = useCallback(
+    (seatId: number, status: string) => {
+      // Don't allow changes while drawer is open and hold is active
+      if (drawerOpenRef.current) return;
+
+      if (status === "BOOKED") {
+        toast.error("This seat is already booked");
+        return;
+      }
+
+      if (status === "HELD") {
+        toast.error("This seat is currently held by another user");
+        return;
+      }
+
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(seatId)) {
+          next.delete(seatId);
+        } else {
+          next.add(seatId);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Hold seats when user clicks "Review & Checkout" on the CartBar
   const handleCartOpen = async () => {
     if (selected.size === 0) {
       toast.error("Please select at least one seat");
@@ -99,14 +168,28 @@ export default function BookEventPage() {
 
     try {
       setIsHolding(true);
+      const seatIdsToHold = Array.from(selected);
+
+      // Bug 1 fix: Record which seats we are holding before the API call
+      heldByMeRef.current = new Set(seatIdsToHold);
+
       await seatAPI.hold(
         eventId,
-        { eventId, seatIds: Array.from(selected) },
+        { eventId, seatIds: seatIdsToHold },
         token,
       );
-      toast.success(`${selected.size} seat(s) held for 5 minutes`);
+
+      // Bug 6 fix: Update ref directly before state update
+      drawerOpenRef.current = true;
+      holdPlacedRef.current = true;
+
       setDrawerOpen(true);
+      toast.success(`${selected.size} seat(s) held for 5 minutes`);
     } catch (error) {
+      // Clear our heldByMe tracking since hold failed
+      heldByMeRef.current = new Set();
+      holdPlacedRef.current = false;
+
       if (error instanceof ApiCallError) {
         toast.error(error.apiError.message);
       } else {
@@ -118,30 +201,41 @@ export default function BookEventPage() {
     }
   };
 
-  // Release seats when drawer closes
+  // Release seats when user cancels from the CartDrawer
   const handleCartClose = async () => {
-    if (selected.size === 0) {
-      setDrawerOpen(false);
+    // Bug 6 fix: Update ref directly
+    drawerOpenRef.current = false;
+    setDrawerOpen(false);
+
+    // Bug 3 fix: Only call release if a hold was actually placed
+    if (!holdPlacedRef.current || !token) {
+      heldByMeRef.current = new Set();
+      // Bug 2 fix: Clear selected even when no hold to release
+      setSelected(new Set());
       return;
     }
 
-    if (!token) return;
+    const seatIdsToRelease = Array.from(heldByMeRef.current);
+    holdPlacedRef.current = false;
+    heldByMeRef.current = new Set();
 
     try {
       await seatAPI.release(
         eventId,
-        { eventId, seatIds: Array.from(selected) },
+        { eventId, seatIds: seatIdsToRelease },
         token,
       );
       toast.info("Seats released");
     } catch (error) {
       console.error("Failed to release seats:", error);
+      // Even if release fails server-side, clear local state since Redis TTL will expire it
     } finally {
-      setDrawerOpen(false);
+      // Bug 2 fix: Always clear local selection after drawer close
+      setSelected(new Set());
     }
   };
 
-  // Checkout
+  // Confirm booking — called from CartDrawer
   const handleCheckout = async () => {
     if (!token || !user) {
       toast.error("Please login to checkout");
@@ -152,9 +246,15 @@ export default function BookEventPage() {
     try {
       setIsCheckingOut(true);
       const booking = await bookingAPI.checkout(
-        { eventId, seatIds: Array.from(selected) },
+        { eventId, seatIds: Array.from(heldByMeRef.current) },
         token,
       );
+
+      // Clear hold tracking
+      holdPlacedRef.current = false;
+      heldByMeRef.current = new Set();
+      drawerOpenRef.current = false;
+
       toast.success(`Booking confirmed! Ref: ${booking.bookingRef}`);
       setSelected(new Set());
       setDrawerOpen(false);
@@ -187,13 +287,12 @@ export default function BookEventPage() {
   }, [seats]);
 
   // Calculate totals
-  const { subtotal, total } = useMemo(() => {
+  const { total } = useMemo(() => {
     let subtotal = 0;
     for (const seatId of selected) {
       const seat = seats.find((s) => s.id === seatId);
       if (seat) subtotal += seat.price;
     }
-    // Note: GST can be added later if needed
     return { subtotal, total: subtotal };
   }, [selected, seats]);
 
@@ -268,21 +367,33 @@ export default function BookEventPage() {
 
                     const isSelected = selected.has(seat.id);
                     const isBooked = seat.status === "BOOKED";
-                    const isHeld = seat.status === "HELD";
+                    // Bug 5 fix: A seat held by us should show as held (yellow) once drawer is open,
+                    // not as selected (red). Seats selected but not yet held show as selected (red).
+                    const isHeldByOther =
+                      seat.status === "HELD" && !heldByMeRef.current.has(seat.id);
+                    const isHeldByMe =
+                      seat.status === "HELD" && heldByMeRef.current.has(seat.id);
 
                     let bgColor = "bg-emerald-50 border-emerald-300"; // AVAILABLE
-                    if (isSelected) bgColor = "bg-[#B86B6B]";
-                    else if (isBooked)
+                    if (isBooked) {
                       bgColor = "bg-slate-300 opacity-50 cursor-not-allowed";
-                    else if (isHeld)
+                    } else if (isHeldByOther) {
                       bgColor =
                         "bg-yellow-100 border-yellow-400 opacity-70 cursor-not-allowed";
+                    } else if (isHeldByMe) {
+                      // Our own held seat — show as a more vibrant held color
+                      bgColor = "bg-amber-300 border-amber-500";
+                    } else if (isSelected) {
+                      bgColor = "bg-[#B86B6B] border-[#B86B6B]";
+                    }
+
+                    const isDisabled = isBooked || isHeldByOther || drawerOpen;
 
                     return (
                       <button
                         key={seat.id}
                         onClick={() => onSeatToggle(seat.id, seat.status)}
-                        disabled={isBooked || isHeld}
+                        disabled={isDisabled}
                         className={`w-8 h-8 rounded border transition ${bgColor} hover:scale-110 disabled:hover:scale-100`}
                         title={`${row}${seatNum} - ${seat.status} - ₹${seat.price}`}
                       />
@@ -305,8 +416,12 @@ export default function BookEventPage() {
                 <span className="text-sm text-[#1E293B]">Selected</span>
               </div>
               <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded bg-amber-300 border border-amber-500" />
+                <span className="text-sm text-[#1E293B]">Held by you</span>
+              </div>
+              <div className="flex items-center gap-2">
                 <div className="w-6 h-6 rounded bg-yellow-100 border border-yellow-400" />
-                <span className="text-sm text-[#1E293B]">Held</span>
+                <span className="text-sm text-[#1E293B]">Held by others</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-6 h-6 rounded bg-slate-300 opacity-50" />
@@ -317,8 +432,8 @@ export default function BookEventPage() {
         </div>
       </section>
 
-      {/* Cart Bar */}
-      {selected.size > 0 && (
+      {/* Cart Bar — shown only when seats are selected and no hold is placed yet */}
+      {selected.size > 0 && !drawerOpen && (
         <CartBar
           selectedSeats={selectedArray.map(
             (s) => `${s.rowLabel}${s.seatNumber}`,
@@ -338,7 +453,6 @@ export default function BookEventPage() {
         totalAmount={total}
         onClose={handleCartClose}
         onCheckout={async () => {
-          // CartDrawer expects a Promise<void>
           await handleCheckout();
         }}
         isLoading={isCheckingOut}
