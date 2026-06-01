@@ -54,8 +54,16 @@ docker compose up -d
 
 ### Step 2 — Run the Spring Boot Application
 
-**Environment Variables Note:** 
-You do **not** need to create a `.env` file for local development. The `application.properties` file is already configured with smart defaults (e.g., `${DB_URL:jdbc:postgresql://localhost:5433/seatbooking}`) that perfectly match the `docker-compose.yml` setup. It will work out of the box!
+**Environment Variables Note (CRITICAL):** 
+You **MUST** create a `.env` file in the `backend/` directory before starting the Spring Boot server. (Passwords were removed from Git for security).
+
+Create a file named `.env` inside the `backend/` folder and paste this exactly:
+```properties
+DB_URL=jdbc:postgresql://localhost:5433/seatbooking
+DB_USERNAME=postgres
+DB_PASSWORD=<enter_password_here>
+JWT_SECRET=<enter_random_secret_string_here>
+```
 
 ```bash
 cd backend
